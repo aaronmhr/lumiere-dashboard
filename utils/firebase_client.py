@@ -76,6 +76,36 @@ def clear_session_cache():
     fetch_sessions.clear()
 
 
+def fetch_session_by_id(_db: firestore.Client, session_id: str) -> Optional[dict]:
+    """
+    Fetch a single session by its session_id field.
+    
+    Args:
+        _db: Firestore client
+        session_id: The session_id to look up
+    
+    Returns:
+        Session document as dictionary, or None if not found
+    """
+    if _db is None or not session_id:
+        return None
+    
+    try:
+        sessions_ref = _db.collection("sessions")
+        query = sessions_ref.where("session_id", "==", session_id).limit(1)
+        docs = list(query.stream())
+        
+        if docs:
+            session_data = docs[0].to_dict()
+            session_data["_doc_id"] = docs[0].id
+            return session_data
+        return None
+    
+    except Exception as e:
+        st.error(f"⚠️ Failed to fetch session: {e}")
+        return None
+
+
 def firestore_timestamp_to_datetime(ts: dict) -> Optional[float]:
     """
     Convert Firestore timestamp dict to Unix timestamp.

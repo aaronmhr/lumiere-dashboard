@@ -1,11 +1,12 @@
 """
 📋 Sessions Page
 ================
-View all sessions from newest to oldest.
+View all sessions from newest to oldest with detail viewer.
 """
 
 import streamlit as st
 import pandas as pd
+import json
 from datetime import datetime
 
 # Page configuration
@@ -16,7 +17,10 @@ st.set_page_config(
 )
 
 # Import utilities
-from utils.firebase_client import get_firestore_client, fetch_sessions, clear_session_cache
+from utils.firebase_client import (
+    get_firestore_client, fetch_sessions, clear_session_cache, 
+    fetch_session_by_id, firestore_timestamp_to_datetime
+)
 from utils.data_processing import sessions_to_dataframe, create_derived_variables
 
 # Custom CSS
@@ -214,6 +218,229 @@ def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
     return df_filtered
 
 
+def format_timestamp(ts):
+    """Format a Firestore timestamp for display"""
+    if ts is None:
+        return "-"
+    if isinstance(ts, dict):
+        unix_ts = firestore_timestamp_to_datetime(ts)
+        if unix_ts:
+            return datetime.fromtimestamp(unix_ts).strftime("%Y-%m-%d %H:%M:%S")
+    if hasattr(ts, 'strftime'):
+        return ts.strftime("%Y-%m-%d %H:%M:%S")
+    return str(ts)
+
+
+def render_session_detail(session_data: dict):
+    """Render detailed view of a single session"""
+    if not session_data:
+        st.warning("Session not found")
+        return
+    
+    st.markdown("---")
+    st.markdown("### 🔍 Session Details")
+    
+    # Header info
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Session ID", session_data.get("session_id", "-")[:12] + "...")
+    with col2:
+        group = session_data.get("group", session_data.get("group_reconstructed", "-"))
+        st.metric("Group", group if group else "-")
+    with col3:
+        st.metric("Device", session_data.get("device_type", "-"))
+    with col4:
+        completed = session_data.get("survey", {}).get("survey_final") if session_data.get("survey") else None
+        st.metric("Status", "✅ Completed" if completed else "⏳ In Progress")
+    
+    # Tabs for different data sections
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Overview", "📱 Device & Meta", "🛒 Cart & Products", "📝 Survey", "🔧 Raw JSON"
+    ])
+    
+    with tab1:
+        render_overview_tab(session_data)
+    
+    with tab2:
+        render_device_tab(session_data)
+    
+    with tab3:
+        render_cart_tab(session_data)
+    
+    with tab4:
+        render_survey_tab(session_data)
+    
+    with tab5:
+        render_raw_json_tab(session_data)
+
+
+def render_overview_tab(session_data: dict):
+    """Render overview tab"""
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### Identifiers")
+        st.markdown(f"**Session ID:** `{session_data.get('session_id', '-')}`")
+        st.markdown(f"**PID:** `{session_data.get('pid', '-')}`")
+        st.markdown(f"**Document ID:** `{session_data.get('_doc_id', '-')}`")
+        
+        st.markdown("#### Group Assignment")
+        st.markdown(f"**Group:** {session_data.get('group', '-')}")
+        st.markdown(f"**Group Reconstructed:** {session_data.get('group_reconstructed', '-')}")
+        
+        variety = session_data.get("group", None)
+        if variety in [1, 2]:
+            st.markdown(f"**Variety:** Low")
+        elif variety in [3, 4]:
+            st.markdown(f"**Variety:** High")
+        
+        if variety in [2, 4]:
+            st.markdown(f"**AR Enabled:** Yes")
+        elif variety in [1, 3]:
+            st.markdown(f"**AR Enabled:** No")
+    
+    with col2:
+        st.markdown("#### Timestamps")
+        st.markdown(f"**Started At:** {format_timestamp(session_data.get('started_at'))}")
+        st.markdown(f"**Last Active:** {format_timestamp(session_data.get('last_active_at'))}")
+        st.markdown(f"**Completed At:** {format_timestamp(session_data.get('completed_at'))}")
+        
+        st.markdown("#### Session Stats")
+        st.markdown(f"**Debug Mode:** {'Yes' if session_data.get('debug_mode') else 'No'}")
+        st.markdown(f"**AR Supported:** {'Yes' if session_data.get('ar_supported') else 'No'}")
+        st.markdown(f"**Timezone:** {session_data.get('timezone', '-')}")
+
+
+def render_device_tab(session_data: dict):
+    """Render device and meta information tab"""
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### Device Information")
+        st.markdown(f"**Device Type:** {session_data.get('device_type', '-')}")
+        st.markdown(f"**AR Supported:** {'Yes' if session_data.get('ar_supported') else 'No'}")
+        st.markdown(f"**Timezone:** {session_data.get('timezone', '-')}")
+        
+    with col2:
+        st.markdown("#### Session Flags")
+        st.markdown(f"**Debug Mode:** {'Yes' if session_data.get('debug_mode') else 'No'}")
+        
+        # Show any reconstruction signals if present
+        recon_signals = session_data.get("reconstruction_signals", {})
+        if recon_signals:
+            st.markdown("#### Reconstruction Signals")
+            for key, value in recon_signals.items():
+                st.markdown(f"**{key}:** {value}")
+
+
+def render_cart_tab(session_data: dict):
+    """Render cart and products tab"""
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### Cart Summary")
+        final_cart = session_data.get("final_cart", []) or []
+        st.markdown(f"**Items in Cart:** {len(final_cart)}")
+        
+        if final_cart:
+            st.markdown("#### Cart Items")
+            for i, item in enumerate(final_cart, 1):
+                if isinstance(item, dict):
+                    st.markdown(f"{i}. **{item.get('name', 'Unknown')}** (ID: {item.get('product_id', '-')})")
+                else:
+                    st.markdown(f"{i}. {item}")
+    
+    with col2:
+        st.markdown("#### Products Viewed")
+        events = session_data.get("events", []) or []
+        
+        # Extract unique products from events
+        product_views = [e for e in events if isinstance(e, dict) and e.get("type") == "product_viewed"]
+        unique_products = set()
+        for pv in product_views:
+            prod_id = pv.get("product_id")
+            if prod_id:
+                unique_products.add(prod_id)
+        
+        st.markdown(f"**Unique Products Viewed:** {len(unique_products)}")
+        
+        # Show AR interactions
+        ar_sessions = [e for e in events if isinstance(e, dict) and e.get("type") == "ar_session"]
+        st.markdown(f"**AR Sessions:** {len(ar_sessions)}")
+        
+        cart_adds = [e for e in events if isinstance(e, dict) and e.get("type") == "cart_add"]
+        st.markdown(f"**Cart Additions:** {len(cart_adds)}")
+
+
+def render_survey_tab(session_data: dict):
+    """Render survey data tab"""
+    survey = session_data.get("survey", {}) or {}
+    
+    if not survey:
+        st.info("No survey data available for this session")
+        return
+    
+    st.markdown(f"**Survey Submitted At:** {format_timestamp(survey.get('submitted_at'))}")
+    
+    # Survey final responses
+    survey_final = survey.get("survey_final", {}) or {}
+    if survey_final:
+        st.markdown("#### Final Survey Responses")
+        
+        # Display as a formatted table
+        survey_df = pd.DataFrame([
+            {"Question": k, "Response": v}
+            for k, v in survey_final.items()
+        ])
+        if not survey_df.empty:
+            st.dataframe(survey_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("Final survey not completed")
+    
+    # Other survey sections
+    other_sections = {k: v for k, v in survey.items() if k not in ["survey_final", "submitted_at"]}
+    if other_sections:
+        st.markdown("#### Other Survey Data")
+        for section_name, section_data in other_sections.items():
+            with st.expander(f"📋 {section_name}"):
+                if isinstance(section_data, dict):
+                    for key, value in section_data.items():
+                        st.markdown(f"**{key}:** {value}")
+                else:
+                    st.write(section_data)
+
+
+def render_raw_json_tab(session_data: dict):
+    """Render raw JSON view"""
+    st.markdown("#### Full Session Data (JSON)")
+    
+    # Create a copy without very long arrays for display
+    display_data = {}
+    for key, value in session_data.items():
+        if key == "events" and isinstance(value, list):
+            display_data[key] = f"[{len(value)} events - expand below]"
+        else:
+            display_data[key] = value
+    
+    # Main data (without events)
+    st.json(display_data)
+    
+    # Events in separate expander
+    events = session_data.get("events", []) or []
+    if events:
+        with st.expander(f"📜 Events ({len(events)} total)"):
+            # Show events in reverse chronological order
+            for i, event in enumerate(events):
+                if isinstance(event, dict):
+                    event_type = event.get("type", "unknown")
+                    timestamp = format_timestamp(event.get("timestamp"))
+                    st.markdown(f"**{i+1}. {event_type}** - {timestamp}")
+                    with st.expander(f"Event {i+1} details", expanded=False):
+                        st.json(event)
+                else:
+                    st.write(f"{i+1}. {event}")
+
+
 def format_sessions_table(df: pd.DataFrame) -> pd.DataFrame:
     """Format dataframe for display"""
     # Sort by started_at descending (newest first)
@@ -393,11 +620,39 @@ def main():
                         return f"{secs}s"
                 df_display["session_duration_sec"] = df_display["session_duration_sec"].apply(format_duration)
             
-            st.dataframe(df_display, use_container_width=True, hide_index=True, height=600)
+            st.dataframe(df_display, use_container_width=True, hide_index=True, height=400)
         else:
             df_display = format_sessions_table(df_filtered)
-            st.dataframe(df_display, use_container_width=True, hide_index=True, height=600)
-    
+            st.dataframe(df_display, use_container_width=True, hide_index=True, height=400)
+        
+        # Session detail viewer
+        st.markdown("---")
+        st.markdown("### 🔎 View Session Details")
+        
+        # Get session IDs sorted by date
+        session_ids = df_filtered.sort_values("started_at", ascending=False)["session_id"].tolist()
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            selected_session_id = st.selectbox(
+                "Select a session to view details",
+                options=[""] + session_ids,
+                format_func=lambda x: "Choose a session..." if x == "" else (x[:20] + "..." if len(x) > 20 else x),
+                key="session_detail_selector"
+            )
+        with col2:
+            if selected_session_id:
+                st.markdown("")  # Spacing
+                st.markdown("")
+                if st.button("🔄 Reload", key="reload_session"):
+                    st.rerun()
+        
+        # Show session details if one is selected
+        if selected_session_id:
+            with st.spinner("Loading session details..."):
+                db = get_firestore_client()
+                session_data = fetch_session_by_id(db, selected_session_id)
+                render_session_detail(session_data)
 
 
 if __name__ == "__main__":
