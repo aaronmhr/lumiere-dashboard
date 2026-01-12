@@ -31,7 +31,6 @@ except ImportError:
 # Import utilities
 from utils.firebase_client import get_firestore_client, fetch_sessions
 from utils.data_processing import sessions_to_dataframe, create_derived_variables, filter_sessions
-from utils.group_reconstruction import reconstruct_groups
 
 # Custom CSS
 st.markdown("""
@@ -93,7 +92,6 @@ def load_data():
         return pd.DataFrame()
     
     df = sessions_to_dataframe(sessions)
-    df = reconstruct_groups(df)
     df = create_derived_variables(df)
     
     # Filter for analysis (exclude debug, require completed)
@@ -104,7 +102,7 @@ def load_data():
 
 def get_numeric_columns(df: pd.DataFrame) -> list[str]:
     """Get list of numeric columns suitable for analysis"""
-    exclude_cols = ["group", "group_final", "group_reconstructed"]
+    exclude_cols = ["group", "group", "group_reconstructed"]
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     return [c for c in numeric_cols if c not in exclude_cols]
 
@@ -161,8 +159,8 @@ def render_descriptive_stats(df: pd.DataFrame, dv: str):
     
     stats_data = []
     
-    for group in sorted(df["group_final"].dropna().unique()):
-        group_data = df[df["group_final"] == group][dv].dropna()
+    for group in sorted(df["group"].dropna().unique()):
+        group_data = df[df["group"] == group][dv].dropna()
         
         stats_data.append({
             "Group": int(group),
@@ -193,8 +191,8 @@ def render_descriptive_stats(df: pd.DataFrame, dv: str):
     # Visualization
     fig = go.Figure()
     
-    for group in sorted(df["group_final"].dropna().unique()):
-        group_data = df[df["group_final"] == group][dv].dropna()
+    for group in sorted(df["group"].dropna().unique()):
+        group_data = df[df["group"] == group][dv].dropna()
         fig.add_trace(go.Box(
             y=group_data,
             name=f"Group {int(group)}",
@@ -218,8 +216,8 @@ def render_one_way_anova(df: pd.DataFrame, dv: str):
     st.markdown("### 🧪 One-Way ANOVA (4 Groups)")
     
     groups = []
-    for group in sorted(df["group_final"].dropna().unique()):
-        group_data = df[df["group_final"] == group][dv].dropna()
+    for group in sorted(df["group"].dropna().unique()):
+        group_data = df[df["group"] == group][dv].dropna()
         if len(group_data) > 0:
             groups.append(group_data)
     
@@ -254,10 +252,10 @@ def render_one_way_anova(df: pd.DataFrame, dv: str):
         st.markdown("#### Post-hoc: Tukey HSD")
         
         # Prepare data for Tukey
-        df_tukey = df[["group_final", dv]].dropna()
+        df_tukey = df[["group", dv]].dropna()
         
         try:
-            tukey = pairwise_tukeyhsd(df_tukey[dv], df_tukey["group_final"], alpha=0.05)
+            tukey = pairwise_tukeyhsd(df_tukey[dv], df_tukey["group"], alpha=0.05)
             
             tukey_df = pd.DataFrame(data=tukey._results_table.data[1:], 
                                    columns=tukey._results_table.data[0])

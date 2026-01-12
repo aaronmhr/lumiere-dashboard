@@ -21,7 +21,6 @@ st.set_page_config(
 # Import utilities
 from utils.firebase_client import get_firestore_client, fetch_sessions
 from utils.data_processing import sessions_to_dataframe, create_derived_variables
-from utils.group_reconstruction import reconstruct_groups
 
 # Custom CSS
 st.markdown("""
@@ -76,7 +75,6 @@ def load_data():
         return pd.DataFrame()
     
     df = sessions_to_dataframe(sessions)
-    df = reconstruct_groups(df)
     df = create_derived_variables(df)
     
     return df
@@ -100,7 +98,7 @@ def get_categorical_columns(df: pd.DataFrame) -> list[str]:
 def render_histogram(df: pd.DataFrame, x_var: str, color_var: str = None):
     """Render histogram"""
     if color_var and color_var != "None":
-        if color_var == "group_final":
+        if color_var == "group":
             color_map = {str(k): v for k, v in GROUP_COLORS.items()}
             df_plot = df.copy()
             df_plot[color_var] = df_plot[color_var].astype(str)
@@ -137,7 +135,7 @@ def render_histogram(df: pd.DataFrame, x_var: str, color_var: str = None):
 def render_box_plot(df: pd.DataFrame, x_var: str, y_var: str, color_var: str = None):
     """Render box plot"""
     if color_var and color_var != "None":
-        if color_var == "group_final":
+        if color_var == "group":
             color_map = {str(k): v for k, v in GROUP_COLORS.items()}
             df_plot = df.copy()
             df_plot[color_var] = df_plot[color_var].astype(str)
@@ -165,7 +163,7 @@ def render_box_plot(df: pd.DataFrame, x_var: str, y_var: str, color_var: str = N
 def render_scatter(df: pd.DataFrame, x_var: str, y_var: str, color_var: str = None):
     """Render scatter plot"""
     if color_var and color_var != "None":
-        if color_var == "group_final":
+        if color_var == "group":
             color_map = {str(k): v for k, v in GROUP_COLORS.items()}
             df_plot = df.copy()
             df_plot[color_var] = df_plot[color_var].astype(str)
@@ -200,7 +198,7 @@ def render_bar_chart(df: pd.DataFrame, x_var: str, y_var: str = None, color_var:
         if color_var and color_var != "None":
             agg_df = df.groupby([x_var, color_var])[y_var].mean().reset_index()
             
-            if color_var == "group_final":
+            if color_var == "group":
                 color_map = {str(k): v for k, v in GROUP_COLORS.items()}
                 agg_df[color_var] = agg_df[color_var].astype(str)
             else:
@@ -232,7 +230,7 @@ def render_bar_chart(df: pd.DataFrame, x_var: str, y_var: str = None, color_var:
 def render_violin(df: pd.DataFrame, x_var: str, y_var: str, color_var: str = None):
     """Render violin plot"""
     if color_var and color_var != "None":
-        if color_var == "group_final":
+        if color_var == "group":
             color_map = {str(k): v for k, v in GROUP_COLORS.items()}
             df_plot = df.copy()
             df_plot[color_var] = df_plot[color_var].astype(str)
@@ -314,7 +312,7 @@ def main():
         ["Histogram", "Box Plot", "Scatter", "Bar Chart", "Violin Plot", "Correlation Matrix"]
     )
     
-    color_options = ["None", "group_final", "variety", "ar_enabled"] + categorical_cols
+    color_options = ["None", "group", "variety", "ar_enabled"] + categorical_cols
     color_options = list(dict.fromkeys(color_options))  # Remove duplicates
     
     color_var = st.sidebar.selectbox("Color By", color_options)
@@ -423,11 +421,11 @@ def main():
     filter_col1, filter_col2, filter_col3 = st.columns(3)
     
     with filter_col1:
-        if "group_final" in df.columns:
+        if "group" in df.columns:
             groups = st.multiselect(
                 "Filter by Group",
-                options=sorted(df["group_final"].dropna().unique()),
-                default=sorted(df["group_final"].dropna().unique())
+                options=sorted(df["group"].dropna().unique()),
+                default=sorted(df["group"].dropna().unique())
             )
     
     with filter_col2:
@@ -441,8 +439,8 @@ def main():
     # Apply filters
     df_filtered = df.copy()
     
-    if "group_final" in df.columns and groups:
-        df_filtered = df_filtered[df_filtered["group_final"].isin(groups)]
+    if "group" in df.columns and groups:
+        df_filtered = df_filtered[df_filtered["group"].isin(groups)]
     
     if "is_completed" in df.columns and completed_only:
         df_filtered = df_filtered[df_filtered["is_completed"] == True]

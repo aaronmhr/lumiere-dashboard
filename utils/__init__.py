@@ -7,7 +7,7 @@ from .data_processing import (
     filter_sessions,
     get_data_quality_report,
 )
-from .group_reconstruction import reconstruct_groups, get_reconstruction_signals
+from .group_reconstruction import merge_group_fields
 
 __all__ = [
     "get_firestore_client",
@@ -16,6 +16,5 @@ __all__ = [
     "create_derived_variables",
     "filter_sessions",
     "get_data_quality_report",
-    "reconstruct_groups",
-    "get_reconstruction_signals",
+    "merge_group_fields",
 ]

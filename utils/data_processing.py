@@ -5,11 +5,7 @@ import numpy as np
 from datetime import datetime
 from typing import Optional
 from .firebase_client import firestore_timestamp_to_datetime
-from .group_reconstruction import (
-    get_reconstruction_signals,
-    HIGH_VARIETY_EXCLUSIVE,
-    LOW_VARIETY_PRODUCTS,
-)
+from .group_reconstruction import merge_group_fields
 
 
 def sessions_to_dataframe(sessions: list[dict]) -> pd.DataFrame:
@@ -41,6 +37,7 @@ def sessions_to_dataframe(sessions: list[dict]) -> pd.DataFrame:
             "timezone": session.get("timezone"),
             "pid": session.get("pid"),
             "group": session.get("group"),
+            "group_reconstructed": session.get("group_reconstructed"),
             "group_assigned_at": firestore_timestamp_to_datetime(
                 session.get("group_assigned_at")
             ),
@@ -57,6 +54,7 @@ def sessions_to_dataframe(sessions: list[dict]) -> pd.DataFrame:
         )
         
         survey_final = survey.get("survey_final", {}) or {}
+        row["has_survey_final"] = len(survey_final) > 0
         for key, value in survey_final.items():
             row[f"survey_{key}"] = value
         
@@ -70,6 +68,9 @@ def sessions_to_dataframe(sessions: list[dict]) -> pd.DataFrame:
     for col in timestamp_cols:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], unit="s", errors="coerce")
+    
+    # Merge group fields (use 'group' if present, else 'group_reconstructed')
+    df = merge_group_fields(df)
     
     return df
 
@@ -87,12 +88,12 @@ def create_derived_variables(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     
     # Variety condition: Low (groups 1,2) or High (groups 3,4)
-    df["variety"] = df["group_final"].apply(
+    df["variety"] = df["group"].apply(
         lambda g: "low" if g in [1, 2] else ("high" if g in [3, 4] else None)
     )
     
     # AR condition: Yes (groups 2,4) or No (groups 1,3)
-    df["ar_enabled"] = df["group_final"].apply(
+    df["ar_enabled"] = df["group"].apply(
         lambda g: True if g in [2, 4] else (False if g in [1, 3] else None)
     )
     
@@ -113,11 +114,11 @@ def create_derived_variables(df: pd.DataFrame) -> pd.DataFrame:
     for col in event_metrics_df.columns:
         df[col] = event_metrics_df[col].values
     
-    # Is completed (has completed_at timestamp)
-    df["is_completed"] = df["completed_at"].notna()
+    # Is completed (has survey_final object with data)
+    df["is_completed"] = df["has_survey_final"].fillna(False)
     
-    # Has survey
-    df["has_survey"] = df["survey_submitted_at"].notna()
+    # Has survey (same as is_completed)
+    df["has_survey"] = df["has_survey_final"].fillna(False)
     
     return df
 
@@ -293,7 +294,7 @@ def get_data_quality_report(df: pd.DataFrame) -> dict:
     
     # Key columns to check
     key_columns = [
-        "session_id", "group", "group_final", "started_at", "completed_at",
+        "session_id", "group", "started_at", "completed_at",
         "pid", "device_type", "final_cart_count", "session_duration_sec"
     ]
     
@@ -339,8 +340,8 @@ def get_data_quality_report(df: pd.DataFrame) -> dict:
             report["issues"].append(f"Found {duplicates} duplicate session IDs")
     
     # Check group distribution
-    if "group_final" in df.columns:
-        group_counts = df["group_final"].value_counts()
+    if "group" in df.columns:
+        group_counts = df["group"].value_counts()
         report["group_distribution"] = group_counts.to_dict()
         
         # Check for imbalanced groups
@@ -367,7 +368,7 @@ def export_to_csv(df: pd.DataFrame, include_events: bool = False) -> str:
     export_df = df.copy()
     
     # Remove complex columns
-    columns_to_drop = ["reconstruction_signals"]
+    columns_to_drop = []
     if not include_events:
         columns_to_drop.extend(["events", "final_cart"])
     
