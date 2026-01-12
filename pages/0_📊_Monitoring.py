@@ -614,55 +614,6 @@ def render_timezone_map(df: pd.DataFrame):
                     st.text(f"• {tz}: {timezone_counts[tz]}")
 
 
-def render_recent_sessions(df: pd.DataFrame):
-    """Render recent sessions table"""
-    st.markdown("### Recent Sessions")
-    
-    if len(df) == 0:
-        st.info("No sessions match the current filters")
-        return
-    
-    # Sort by started_at descending
-    df_recent = df.sort_values("started_at", ascending=False).head(20)
-    
-    # Select and format columns for display
-    display_cols = ["session_id", "started_at", "group", "device_type", "is_completed", "session_duration_sec"]
-    available_cols = [c for c in display_cols if c in df_recent.columns]
-    
-    df_display = df_recent[available_cols].copy()
-    
-    # Format columns
-    if "started_at" in df_display.columns:
-        df_display["started_at"] = df_display["started_at"].dt.strftime("%Y-%m-%d %H:%M")
-    
-    if "session_duration_sec" in df_display.columns:
-        df_display["session_duration_sec"] = df_display["session_duration_sec"].apply(
-            lambda x: f"{x/60:.1f} min" if pd.notna(x) else "-"
-        )
-    
-    if "is_completed" in df_display.columns:
-        df_display["is_completed"] = df_display["is_completed"].apply(
-            lambda x: "✅" if x else "⏳"
-        )
-    
-    # Rename columns for display
-    column_names = {
-        "session_id": "Session ID",
-        "started_at": "Started",
-        "group": "Group",
-        "device_type": "Device",
-        "is_completed": "Status",
-        "session_duration_sec": "Duration",
-    }
-    df_display = df_display.rename(columns=column_names)
-    
-    st.dataframe(
-        df_display,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-
 def main():
     st.title("📊 Monitoring")
     st.markdown("Real-time experiment progress and session tracking")
@@ -725,10 +676,6 @@ def main():
     st.markdown("---")
     
     render_timeline(df_filtered)
-    
-    st.markdown("---")
-    
-    render_recent_sessions(df_filtered)
     
     st.markdown("---")
     
