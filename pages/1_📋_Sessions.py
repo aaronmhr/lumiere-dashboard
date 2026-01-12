@@ -81,7 +81,7 @@ def render_filters(df: pd.DataFrame) -> dict:
     
     filters = {}
     
-    # Search by session ID or PID
+    # 0. Search by session ID or PID (page-specific filter)
     search_term = st.sidebar.text_input(
         "Search (Session ID or PID)",
         placeholder="Enter search term...",
@@ -89,7 +89,7 @@ def render_filters(df: pd.DataFrame) -> dict:
     )
     filters["search"] = search_term.strip() if search_term else None
     
-    # Device type filter
+    # 1. Device type filter
     if "device_type" in df.columns:
         device_options = sorted(df["device_type"].dropna().unique().tolist())
         filters["device_types"] = st.sidebar.multiselect(
@@ -99,22 +99,11 @@ def render_filters(df: pd.DataFrame) -> dict:
         )
         unknown_device_count = df["device_type"].isna().sum()
         if unknown_device_count > 0:
-            filters["include_unknown_device"] = st.sidebar.checkbox(
-                f"Include unknown device ({unknown_device_count})",
-                value=True
-            )
+            filters["include_unknown_device"] = True  # Will be set by checkbox later
         else:
             filters["include_unknown_device"] = True
     
-    # Completion status filter
-    if "is_completed" in df.columns:
-        filters["completion_status"] = st.sidebar.selectbox(
-            "Completion Status",
-            options=["All", "Completed", "In Progress"],
-            index=0
-        )
-    
-    # Group filter
+    # 2. Group filter
     if "group" in df.columns:
         group_options = sorted([int(g) for g in df["group"].dropna().unique()])
         filters["groups"] = st.sidebar.multiselect(
@@ -123,20 +112,44 @@ def render_filters(df: pd.DataFrame) -> dict:
             default=group_options,
             format_func=lambda x: f"Group {x}"
         )
+    
+    # 3. Completion status filter
+    if "is_completed" in df.columns:
+        filters["completion_status"] = st.sidebar.selectbox(
+            "Completion Status",
+            options=["All", "Completed", "In Progress"],
+            index=0
+        )
+    
+    # 4. Include unassigned group checkbox
+    if "group" in df.columns:
         unassigned_count = df["group"].isna().sum()
         if unassigned_count > 0:
             filters["include_unknown_group"] = st.sidebar.checkbox(
-                f"Include unassigned ({unassigned_count})",
-                value=True
+                f"Include unassigned group ({unassigned_count})",
+                value=False
             )
         else:
-            filters["include_unknown_group"] = True
+            filters["include_unknown_group"] = False
     
-    # Debug mode filter
+    # 5. Exclude reconstructed groups filter
+    if "group_reconstructed" in df.columns:
+        reconstructed_count = df["group_reconstructed"].notna().sum()
+        if reconstructed_count > 0:
+            filters["exclude_reconstructed"] = st.sidebar.checkbox(
+                f"Exclude reconstructed groups ({reconstructed_count})",
+                value=False
+            )
+        else:
+            filters["exclude_reconstructed"] = False
+    else:
+        filters["exclude_reconstructed"] = False
+    
+    # 6. Debug mode filter (at the bottom)
     if "debug_mode" in df.columns:
         filters["exclude_debug"] = st.sidebar.checkbox(
             "Exclude debug sessions",
-            value=False
+            value=True
         )
     
     st.sidebar.markdown("---")
@@ -193,6 +206,10 @@ def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
     # Debug mode filter
     if filters.get("exclude_debug") and "debug_mode" in df_filtered.columns:
         df_filtered = df_filtered[df_filtered["debug_mode"] != True]
+    
+    # Exclude reconstructed groups filter
+    if filters.get("exclude_reconstructed") and "group_reconstructed" in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered["group_reconstructed"].isna()]
     
     return df_filtered
 

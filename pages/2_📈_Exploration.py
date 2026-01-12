@@ -80,19 +80,144 @@ def load_data():
     return df
 
 
+def render_filters(df: pd.DataFrame) -> dict:
+    """Render filter controls in sidebar and return filter settings"""
+    st.sidebar.markdown("### 🔍 Filters")
+    
+    filters = {}
+    
+    # 1. Device type filter
+    if "device_type" in df.columns:
+        device_options = sorted(df["device_type"].dropna().unique().tolist())
+        filters["device_types"] = st.sidebar.multiselect(
+            "Device Type",
+            options=device_options,
+            default=device_options,
+            help="Select device types to include"
+        )
+        unknown_device_count = df["device_type"].isna().sum()
+        if unknown_device_count > 0:
+            filters["include_unknown_device"] = True  # Will be set by checkbox later
+        else:
+            filters["include_unknown_device"] = True
+    
+    # 2. Group filter
+    if "group" in df.columns:
+        group_options = sorted([int(g) for g in df["group"].dropna().unique()])
+        filters["groups"] = st.sidebar.multiselect(
+            "Groups",
+            options=group_options,
+            default=group_options,
+            format_func=lambda x: f"Group {x}",
+            help="Select groups to include"
+        )
+    
+    # 3. Completion status filter
+    if "is_completed" in df.columns:
+        filters["completion_status"] = st.sidebar.selectbox(
+            "Completion Status",
+            options=["All", "Completed", "In Progress"],
+            index=0,
+            help="Filter by session completion"
+        )
+    
+    # 4. Include unassigned group checkbox
+    if "group" in df.columns:
+        unassigned_group_count = df["group"].isna().sum()
+        if unassigned_group_count > 0:
+            filters["include_unknown_group"] = st.sidebar.checkbox(
+                f"Include unassigned group ({unassigned_group_count})",
+                value=False
+            )
+        else:
+            filters["include_unknown_group"] = False
+    
+    # 5. Exclude reconstructed groups filter
+    if "group_reconstructed" in df.columns:
+        reconstructed_count = df["group_reconstructed"].notna().sum()
+        if reconstructed_count > 0:
+            filters["exclude_reconstructed"] = st.sidebar.checkbox(
+                f"Exclude reconstructed groups ({reconstructed_count})",
+                value=False
+            )
+        else:
+            filters["exclude_reconstructed"] = False
+    else:
+        filters["exclude_reconstructed"] = False
+    
+    # 6. Debug mode filter (at the bottom)
+    if "debug_mode" in df.columns:
+        filters["exclude_debug"] = st.sidebar.checkbox(
+            "Exclude debug sessions",
+            value=True
+        )
+    
+    return filters
+
+
+def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
+    """Apply all filters to the dataframe"""
+    df_filtered = df.copy()
+    
+    # Device type filter
+    if filters.get("device_types") is not None and "device_type" in df_filtered.columns:
+        include_unknown_device = filters.get("include_unknown_device", True)
+        if include_unknown_device:
+            df_filtered = df_filtered[
+                df_filtered["device_type"].isin(filters["device_types"]) | 
+                df_filtered["device_type"].isna()
+            ]
+        else:
+            df_filtered = df_filtered[df_filtered["device_type"].isin(filters["device_types"])]
+    
+    # Completion status filter
+    if filters.get("completion_status") != "All" and "is_completed" in df_filtered.columns:
+        if filters["completion_status"] == "Completed":
+            df_filtered = df_filtered[df_filtered["is_completed"] == True]
+        elif filters["completion_status"] == "In Progress":
+            df_filtered = df_filtered[df_filtered["is_completed"] == False]
+    
+    # Debug mode filter
+    if filters.get("exclude_debug") and "debug_mode" in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered["debug_mode"] != True]
+    
+    # Group filter
+    if filters.get("groups") is not None and "group" in df_filtered.columns:
+        include_unknown_group = filters.get("include_unknown_group", True)
+        if include_unknown_group:
+            df_filtered = df_filtered[
+                df_filtered["group"].isin(filters["groups"]) | 
+                df_filtered["group"].isna()
+            ]
+        else:
+            df_filtered = df_filtered[df_filtered["group"].isin(filters["groups"])]
+    
+    # Exclude reconstructed groups filter
+    if filters.get("exclude_reconstructed") and "group_reconstructed" in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered["group_reconstructed"].isna()]
+    
+    return df_filtered
+
+
 def get_numeric_columns(df: pd.DataFrame) -> list[str]:
-    """Get list of numeric columns"""
-    return df.select_dtypes(include=[np.number]).columns.tolist()
+    """Get list of numeric columns suitable for analysis"""
+    exclude_cols = [
+        "group", "group_reconstructed", 
+        "total_ar_rotations", "total_ar_zooms"
+    ]
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    return [c for c in numeric_cols if c not in exclude_cols]
 
 
 def get_categorical_columns(df: pd.DataFrame) -> list[str]:
     """Get list of categorical columns"""
+    exclude_cols = ["group", "group_reconstructed"]
     cat_cols = df.select_dtypes(include=["object", "bool", "category"]).columns.tolist()
     # Also include columns with few unique values
     for col in df.columns:
         if col not in cat_cols and df[col].nunique() <= 10:
             cat_cols.append(col)
-    return list(set(cat_cols))
+    return [c for c in list(set(cat_cols)) if c not in exclude_cols]
 
 
 def render_histogram(df: pd.DataFrame, x_var: str, color_var: str = None):
@@ -285,8 +410,6 @@ def main():
     st.title("📈 Exploration")
     st.markdown("Interactive data visualization and pattern discovery")
     
-    st.markdown("---")
-    
     # Load data
     with st.spinner("Loading data..."):
         df = load_data()
@@ -302,20 +425,37 @@ def main():
     # Get column lists
     numeric_cols = get_numeric_columns(df)
     categorical_cols = get_categorical_columns(df)
-    all_cols = df.columns.tolist()
     
-    # Sidebar controls
-    st.sidebar.markdown("### Chart Settings")
+    # Sidebar chart controls (on top)
+    st.sidebar.markdown("### 📊 Chart Settings")
     
     chart_type = st.sidebar.selectbox(
         "Chart Type",
         ["Histogram", "Box Plot", "Scatter", "Bar Chart", "Violin Plot", "Correlation Matrix"]
     )
     
-    color_options = ["None", "group", "variety", "ar_enabled"] + categorical_cols
+    color_options = ["None", "variety", "ar_enabled"] + [c for c in categorical_cols if c not in ["variety", "ar_enabled"]]
     color_options = list(dict.fromkeys(color_options))  # Remove duplicates
     
     color_var = st.sidebar.selectbox("Color By", color_options)
+    
+    st.sidebar.markdown("---")
+    
+    # Render filters in sidebar (below chart settings)
+    filters = render_filters(df)
+    
+    # Apply filters
+    df_filtered = apply_filters(df, filters)
+    
+    # Update column lists from filtered data
+    numeric_cols = get_numeric_columns(df_filtered)
+    categorical_cols = get_categorical_columns(df_filtered)
+    
+    # Show filter status
+    if len(df_filtered) < len(df):
+        st.info(f"Showing {len(df_filtered)} of {len(df)} sessions (filtered)")
+    else:
+        st.success(f"Showing all {len(df)} sessions")
     
     st.markdown("---")
     
@@ -325,19 +465,19 @@ def main():
         
         x_var = st.selectbox("Variable", numeric_cols, key="hist_x")
         
-        fig = render_histogram(df, x_var, color_var if color_var != "None" else None)
+        fig = render_histogram(df_filtered, x_var, color_var if color_var != "None" else None)
         st.plotly_chart(fig, use_container_width=True)
         
         # Stats
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Mean", f"{df[x_var].mean():.2f}")
+            st.metric("Mean", f"{df_filtered[x_var].mean():.2f}")
         with col2:
-            st.metric("Median", f"{df[x_var].median():.2f}")
+            st.metric("Median", f"{df_filtered[x_var].median():.2f}")
         with col3:
-            st.metric("Std Dev", f"{df[x_var].std():.2f}")
+            st.metric("Std Dev", f"{df_filtered[x_var].std():.2f}")
         with col4:
-            st.metric("N", f"{df[x_var].notna().sum()}")
+            st.metric("N", f"{df_filtered[x_var].notna().sum()}")
     
     elif chart_type == "Box Plot":
         st.markdown("### Box Plot")
@@ -348,7 +488,7 @@ def main():
         with col2:
             y_var = st.selectbox("Y (Numeric)", numeric_cols, key="box_y")
         
-        fig = render_box_plot(df, x_var, y_var, color_var if color_var != "None" else None)
+        fig = render_box_plot(df_filtered, x_var, y_var, color_var if color_var != "None" else None)
         st.plotly_chart(fig, use_container_width=True)
     
     elif chart_type == "Scatter":
@@ -361,12 +501,12 @@ def main():
             y_var = st.selectbox("Y Variable", numeric_cols, key="scatter_y",
                                 index=min(1, len(numeric_cols)-1))
         
-        fig = render_scatter(df, x_var, y_var, color_var if color_var != "None" else None)
+        fig = render_scatter(df_filtered, x_var, y_var, color_var if color_var != "None" else None)
         st.plotly_chart(fig, use_container_width=True)
         
         # Show correlation
         if x_var != y_var:
-            corr = df[[x_var, y_var]].corr().iloc[0, 1]
+            corr = df_filtered[[x_var, y_var]].corr().iloc[0, 1]
             st.metric("Pearson Correlation", f"{corr:.3f}")
     
     elif chart_type == "Bar Chart":
@@ -380,7 +520,7 @@ def main():
             y_var_sel = st.selectbox("Y (Numeric, optional)", y_options, key="bar_y")
             y_var = None if y_var_sel == "None (Count)" else y_var_sel
         
-        fig = render_bar_chart(df, x_var, y_var, color_var if color_var != "None" else None)
+        fig = render_bar_chart(df_filtered, x_var, y_var, color_var if color_var != "None" else None)
         st.plotly_chart(fig, use_container_width=True)
     
     elif chart_type == "Violin Plot":
@@ -392,7 +532,7 @@ def main():
         with col2:
             y_var = st.selectbox("Y (Numeric)", numeric_cols, key="violin_y")
         
-        fig = render_violin(df, x_var, y_var, color_var if color_var != "None" else None)
+        fig = render_violin(df_filtered, x_var, y_var, color_var if color_var != "None" else None)
         st.plotly_chart(fig, use_container_width=True)
     
     elif chart_type == "Correlation Matrix":
@@ -410,45 +550,9 @@ def main():
         )
         
         if selected_vars:
-            fig = render_correlation_matrix(df, selected_vars)
+            fig = render_correlation_matrix(df_filtered, selected_vars)
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
-    
-    # Quick filters section
-    st.markdown("---")
-    st.markdown("### 🔍 Quick Filters")
-    
-    filter_col1, filter_col2, filter_col3 = st.columns(3)
-    
-    with filter_col1:
-        if "group" in df.columns:
-            groups = st.multiselect(
-                "Filter by Group",
-                options=sorted(df["group"].dropna().unique()),
-                default=sorted(df["group"].dropna().unique())
-            )
-    
-    with filter_col2:
-        if "is_completed" in df.columns:
-            completed_only = st.checkbox("Completed sessions only", value=False)
-    
-    with filter_col3:
-        if "debug_mode" in df.columns:
-            exclude_debug = st.checkbox("Exclude debug sessions", value=True)
-    
-    # Apply filters
-    df_filtered = df.copy()
-    
-    if "group" in df.columns and groups:
-        df_filtered = df_filtered[df_filtered["group"].isin(groups)]
-    
-    if "is_completed" in df.columns and completed_only:
-        df_filtered = df_filtered[df_filtered["is_completed"] == True]
-    
-    if "debug_mode" in df.columns and exclude_debug:
-        df_filtered = df_filtered[df_filtered["debug_mode"] != True]
-    
-    st.info(f"Showing {len(df_filtered)} of {len(df)} sessions")
 
 
 if __name__ == "__main__":

@@ -94,10 +94,126 @@ def load_data():
     df = sessions_to_dataframe(sessions)
     df = create_derived_variables(df)
     
-    # Filter for analysis (exclude debug, require completed)
-    df = filter_sessions(df, exclude_debug=True, exclude_incomplete=True)
-    
     return df
+
+
+def render_filters(df: pd.DataFrame) -> dict:
+    """Render filter controls in sidebar and return filter settings"""
+    st.sidebar.markdown("### 🔍 Filters")
+    
+    filters = {}
+    
+    # 1. Device type filter
+    if "device_type" in df.columns:
+        device_options = sorted(df["device_type"].dropna().unique().tolist())
+        filters["device_types"] = st.sidebar.multiselect(
+            "Device Type",
+            options=device_options,
+            default=device_options,
+            help="Select device types to include"
+        )
+        unknown_device_count = df["device_type"].isna().sum()
+        if unknown_device_count > 0:
+            filters["include_unknown_device"] = True  # Will be set by checkbox later
+        else:
+            filters["include_unknown_device"] = True
+    
+    # 2. Group filter
+    if "group" in df.columns:
+        group_options = sorted([int(g) for g in df["group"].dropna().unique()])
+        filters["groups"] = st.sidebar.multiselect(
+            "Groups",
+            options=group_options,
+            default=group_options,
+            format_func=lambda x: f"Group {x}",
+            help="Select groups to include"
+        )
+    
+    # 3. Completion status filter
+    if "is_completed" in df.columns:
+        filters["completion_status"] = st.sidebar.selectbox(
+            "Completion Status",
+            options=["All", "Completed", "In Progress"],
+            index=1,  # Default to Completed for analysis
+            help="Filter by session completion"
+        )
+    
+    # 4. Include unassigned group checkbox
+    if "group" in df.columns:
+        unassigned_group_count = df["group"].isna().sum()
+        if unassigned_group_count > 0:
+            filters["include_unknown_group"] = st.sidebar.checkbox(
+                f"Include unassigned group ({unassigned_group_count})",
+                value=False
+            )
+        else:
+            filters["include_unknown_group"] = False
+    
+    # 5. Exclude reconstructed groups filter
+    if "group_reconstructed" in df.columns:
+        reconstructed_count = df["group_reconstructed"].notna().sum()
+        if reconstructed_count > 0:
+            filters["exclude_reconstructed"] = st.sidebar.checkbox(
+                f"Exclude reconstructed groups ({reconstructed_count})",
+                value=False
+            )
+        else:
+            filters["exclude_reconstructed"] = False
+    else:
+        filters["exclude_reconstructed"] = False
+    
+    # 6. Debug mode filter (at the bottom)
+    if "debug_mode" in df.columns:
+        filters["exclude_debug"] = st.sidebar.checkbox(
+            "Exclude debug sessions",
+            value=True
+        )
+    
+    return filters
+
+
+def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
+    """Apply all filters to the dataframe"""
+    df_filtered = df.copy()
+    
+    # Device type filter
+    if filters.get("device_types") is not None and "device_type" in df_filtered.columns:
+        include_unknown_device = filters.get("include_unknown_device", True)
+        if include_unknown_device:
+            df_filtered = df_filtered[
+                df_filtered["device_type"].isin(filters["device_types"]) | 
+                df_filtered["device_type"].isna()
+            ]
+        else:
+            df_filtered = df_filtered[df_filtered["device_type"].isin(filters["device_types"])]
+    
+    # Completion status filter
+    if filters.get("completion_status") != "All" and "is_completed" in df_filtered.columns:
+        if filters["completion_status"] == "Completed":
+            df_filtered = df_filtered[df_filtered["is_completed"] == True]
+        elif filters["completion_status"] == "In Progress":
+            df_filtered = df_filtered[df_filtered["is_completed"] == False]
+    
+    # Debug mode filter
+    if filters.get("exclude_debug") and "debug_mode" in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered["debug_mode"] != True]
+    
+    # Group filter
+    if filters.get("groups") is not None and "group" in df_filtered.columns:
+        include_unknown_group = filters.get("include_unknown_group", True)
+        if include_unknown_group:
+            df_filtered = df_filtered[
+                df_filtered["group"].isin(filters["groups"]) | 
+                df_filtered["group"].isna()
+            ]
+        else:
+            df_filtered = df_filtered[df_filtered["group"].isin(filters["groups"])]
+    
+    # Exclude reconstructed groups filter
+    if filters.get("exclude_reconstructed") and "group_reconstructed" in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered["group_reconstructed"].isna()]
+    
+    return df_filtered
 
 
 def get_numeric_columns(df: pd.DataFrame) -> list[str]:
@@ -505,21 +621,33 @@ def main():
         return
     
     if df.empty:
-        st.info("No completed sessions found for analysis.")
+        st.info("No sessions found.")
         return
     
-    st.success(f"Analyzing {len(df)} completed sessions")
+    # Variable selection first (Analysis Settings)
+    st.sidebar.markdown("### 📊 Analysis Settings")
     
-    # Variable selection
     numeric_cols = get_numeric_columns(df)
-    
-    st.sidebar.markdown("### Analysis Settings")
     
     dv = st.sidebar.selectbox(
         "Dependent Variable",
         options=numeric_cols,
         index=numeric_cols.index("session_duration_sec") if "session_duration_sec" in numeric_cols else 0
     )
+    
+    st.sidebar.markdown("---")
+    
+    # Render filters
+    filters = render_filters(df)
+    
+    # Apply filters
+    df_filtered = apply_filters(df, filters)
+    
+    if df_filtered.empty:
+        st.warning("No sessions match the current filters.")
+        return
+    
+    st.success(f"Analyzing {len(df_filtered)} sessions (filtered from {len(df)} total)")
     
     # Create tabs for different analyses
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -531,23 +659,23 @@ def main():
     ])
     
     with tab1:
-        render_descriptive_stats(df, dv)
+        render_descriptive_stats(df_filtered, dv)
     
     with tab2:
-        render_one_way_anova(df, dv)
+        render_one_way_anova(df_filtered, dv)
     
     with tab3:
-        render_factorial_anova(df, dv)
+        render_factorial_anova(df_filtered, dv)
     
     with tab4:
-        render_t_tests(df, dv)
+        render_t_tests(df_filtered, dv)
     
     with tab5:
         st.markdown("Select independent variables for regression:")
         
         potential_ivs = ["variety", "ar_enabled", "unique_products_viewed", 
                         "total_ar_time_sec", "ar_session_count", "scrolled_to_bottom"]
-        potential_ivs = [iv for iv in potential_ivs if iv in df.columns and iv != dv]
+        potential_ivs = [iv for iv in potential_ivs if iv in df_filtered.columns and iv != dv]
         
         selected_ivs = st.multiselect(
             "Independent Variables",
@@ -555,7 +683,7 @@ def main():
             default=["variety", "ar_enabled"] if all(v in potential_ivs for v in ["variety", "ar_enabled"]) else potential_ivs[:2]
         )
         
-        render_regression(df, dv, selected_ivs)
+        render_regression(df_filtered, dv, selected_ivs)
     
     # Statistical notes
     st.markdown("---")
@@ -569,8 +697,8 @@ def main():
         
         **Analysis Notes:**
         
-        - Data is automatically filtered to exclude debug sessions and include only completed sessions
-        - Group reconstruction is applied for sessions missing the group field
+        - Use the sidebar filters to control which sessions are included in the analysis
+        - By default, debug sessions are excluded and only completed sessions are shown
         - All tests assume α = 0.05 significance level
         """)
 
